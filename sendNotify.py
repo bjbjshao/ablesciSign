@@ -67,7 +67,7 @@ def server_jiang_push(title: str, content: str) -> bool:
         # 发送请求
         start_time = time.time()
         response = requests.post(
-            f"https://sc.ftqq.com/{SCKEY}.send",
+            f"https://sctapi.ftqq.com/{SCKEY}.send",
             data=payload,
             timeout=15
         )
