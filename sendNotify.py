@@ -1,473 +1,309 @@
 #!/usr/bin/env python3
 # _*_ coding:utf-8 _*_
 
-# Modify: Kirin
+"""
+消息推送工具 - 支持息知、Server酱、PushPlus三种推送方式
+提供统一的消息推送接口，支持多种通知渠道
+"""
 
 import sys
-import os, re
+import os
 import requests
 import json
 import time
-import hmac
-import hashlib
-import base64
-import urllib.parse
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
-from typing import Dict, Any, Optional
-cur_path = os.path.abspath(os.path.dirname(__file__))
-root_path = os.path.split(cur_path)[0]
-sys.path.append(root_path)
+from typing import Optional, List, Dict, Any
 
-# 通知服务
-BARK = ''  # bark服务,自行搜索; secrets可填;
-BARK_PUSH = ''  # bark自建服务器，要填完整链接，结尾的/不要
-SCKEY = ''  # Server酱的SCKEY; secrets可填
-XZKEY = ''  # 息知的XZKEY; secrets可填
-TG_BOT_TOKEN = ''  # tg机器人的TG_BOT_TOKEN; secrets可填1407203283:AAG9rt-6RDaaX0HBLZQq0laNOh898iFYaRQ
-TG_USER_ID = ''  # tg机器人的TG_USER_ID; secrets可填 1434078534
-TG_API_HOST = ''  # tg 代理api
-TG_PROXY_IP = ''  # tg机器人的TG_PROXY_IP; secrets可填
-TG_PROXY_PORT = ''  # tg机器人的TG_PROXY_PORT; secrets可填
-DD_BOT_ACCESS_TOKEN = ''  # 钉钉机器人的DD_BOT_ACCESS_TOKEN; secrets可填
-DD_BOT_SECRET = ''  # 钉钉机器人的DD_BOT_SECRET; secrets可填
-QQ_SKEY = ''  # qq机器人的QQ_SKEY; secrets可填
-QQ_MODE = ''  # qq机器人的QQ_MODE; secrets可填
-QYWX_AM = ''  # 企业微信
-QYWX_KEY = ''  # 企业微信BOT
-PUSH_PLUS_TOKEN = ''  # 微信推送Plus+
-notify_mode = []
+# 通知服务配置（可从环境变量读取）
+SCKEY = os.environ.get("SCKEY", "")          # Server酱的SCKEY
+XZKEY = os.environ.get("XZKEY", "")          # 息知的XZKEY
+PUSH_PLUS_TOKEN = os.environ.get("PUSH_PLUS_TOKEN", "")  # PushPlus的Token
 
-message_info = ''''''
+# 全局消息缓冲区
+message_buffer = []
 
-# GitHub action运行需要填写对应的secrets
-if "BARK" in os.environ and os.environ["BARK"]:
-    BARK = os.environ["BARK"]
-if "BARK_PUSH" in os.environ and os.environ["BARK_PUSH"]:
-    BARK_PUSH = os.environ["BARK_PUSH"]
-if "SCKEY" in os.environ and os.environ["SCKEY"]:
-    SCKEY = os.environ["SCKEY"]
-if "XZKEY" in os.environ and os.environ["XZKEY"]:
-    XZKEY = os.environ["XZKEY"]
-if "TG_BOT_TOKEN" in os.environ and os.environ["TG_BOT_TOKEN"] and "TG_USER_ID" in os.environ and os.environ["TG_USER_ID"]:
-    TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
-    TG_USER_ID = os.environ["TG_USER_ID"]
-if "TG_API_HOST" in os.environ and os.environ["TG_API_HOST"]:
-    TG_API_HOST = os.environ["TG_API_HOST"]
-if "DD_BOT_ACCESS_TOKEN" in os.environ and os.environ["DD_BOT_ACCESS_TOKEN"] and "DD_BOT_SECRET" in os.environ and \
-        os.environ["DD_BOT_SECRET"]:
-    DD_BOT_ACCESS_TOKEN = os.environ["DD_BOT_ACCESS_TOKEN"]
-    DD_BOT_SECRET = os.environ["DD_BOT_SECRET"]
-if "QQ_SKEY" in os.environ and os.environ["QQ_SKEY"] and "QQ_MODE" in os.environ and os.environ["QQ_MODE"]:
-    QQ_SKEY = os.environ["QQ_SKEY"]
-    QQ_MODE = os.environ["QQ_MODE"]
-# 获取pushplus+ PUSH_PLUS_TOKEN
-if "PUSH_PLUS_TOKEN" in os.environ:
-    if len(os.environ["PUSH_PLUS_TOKEN"]) > 1:
-        PUSH_PLUS_TOKEN = os.environ["PUSH_PLUS_TOKEN"]
-        # print("已获取并使用Env环境 PUSH_PLUS_TOKEN")
-# 获取企业微信应用推送 QYWX_AM
-if "QYWX_AM" in os.environ:
-    if len(os.environ["QYWX_AM"]) > 1:
-        QYWX_AM = os.environ["QYWX_AM"]
+def add_message(msg: str) -> None:
+    """
+    添加消息到缓冲区
+    
+    Args:
+        msg: 要添加的消息内容
+    """
+    print(f"📝 添加消息: {msg}")
+    message_buffer.append(msg)
 
-if "QYWX_KEY" in os.environ:
-    if len(os.environ["QYWX_KEY"]) > 1:
-        QYWX_KEY = os.environ["QYWX_KEY"]
-        # print("已获取并使用Env环境 QYWX_AM")
+def get_message_content() -> str:
+    """获取所有缓冲消息的内容"""
+    return "\n".join(message_buffer)
 
-if BARK:
-    notify_mode.append('bark')
-    # print("BARK 推送打开")
-if BARK_PUSH:
-    notify_mode.append('bark')
-    # print("BARK 推送打开")
-if SCKEY:
-    notify_mode.append('sc_key')
-    # print("Server酱 推送打开")
-if XZKEY:
-    notify_mode.append('xz_key')
-    # print("息知 推送打开")
-if TG_BOT_TOKEN and TG_USER_ID:
-    notify_mode.append('telegram_bot')
-    # print("Telegram 推送打开")
-if DD_BOT_ACCESS_TOKEN and DD_BOT_SECRET:
-    notify_mode.append('dingding_bot')
-    # print("钉钉机器人 推送打开")
-if QQ_SKEY and QQ_MODE:
-    notify_mode.append('coolpush_bot')
-    # print("QQ机器人 推送打开")
+def clear_messages() -> None:
+    """清空消息缓冲区"""
+    message_buffer.clear()
+    print("🗑️  消息缓冲区已清空")
 
-if PUSH_PLUS_TOKEN:
-    notify_mode.append('pushplus_bot')
-    # print("微信推送Plus机器人 推送打开")
-if QYWX_AM:
-    notify_mode.append('wecom_app')
-    # print("企业微信机器人 推送打开")
-
-if QYWX_KEY:
-    notify_mode.append('wecom_key')
-    # print("企业微信机器人 推送打开")
-
-
-def message(str_msg):
-    global message_info
-    print(str_msg)
-    message_info = "{}\n{}".format(message_info, str_msg)
-    sys.stdout.flush()
-
-
-def bark(title, content):
-    print("\n")
-    if BARK:
-        try:
-            response = requests.get(
-                f"""https://api.day.app/{BARK}/{title}/{urllib.parse.quote_plus(content)}""").json()
-            if response['code'] == 200:
-                print('推送成功！')
-            else:
-                print('推送失败！')
-        except:
-            print('推送失败！')
-    if BARK_PUSH:
-        try:
-            response = requests.get(
-                f"""{BARK_PUSH}/{title}/{urllib.parse.quote_plus(content)}""").json()
-            if response['code'] == 200:
-                print('推送成功！')
-            else:
-                print('推送失败！')
-        except:
-            print('推送失败！')
-    print("bark服务启动")
-    if BARK == '' and BARK_PUSH == '':
-        print("bark服务的bark_token未设置!!\n取消推送")
-        return
-
-
-def serverJ(title, content):
-    print("\n")
+def server_jiang_push(title: str, content: str) -> bool:
+    """
+    Server酱推送实现
+    
+    Args:
+        title: 消息标题
+        content: 消息内容
+        
+    Returns:
+        bool: 推送是否成功
+    """
+    print("🚀 开始Server酱推送")
+    
     if not SCKEY:
-        print("server酱服务的SCKEY未设置!!\n取消推送")
-        return
-    print("serverJ服务启动")
-    data = {
-        "text": title,
-        "desp": content.replace("\n", "\n\n")
-    }
-    response = requests.post(f"https://sc.ftqq.com/{SCKEY}.send", data=data).json()
-    if response['data']['errno'] == 0:
-        print('推送成功！')
-    else:
-        print('推送失败！')
-
-# 息知 推送
-def xizhi(title, content):
-    headers1 = {'Content-Type': 'application/json'}
-    print("\n")
-    if not XZKEY:
-        print("息知服务的XZKEY未设置!!\n取消推送")
-        return
-    print("息知服务启动")
-    json_data = {
-        'title': title,
-        'content': content.replace("\n", "\n\n")
-    }
-    data1 = json.dumps(json_data).encode('utf-8')
+        print("❌ Server酱SCKEY未配置，推送取消")
+        return False
+    
     try:
-        response = requests.post(f"https://xizhi.qqoq.net/{XZKEY}.send", data=data1, headers=headers1)
+        # 构造请求数据
+        payload = {
+            "text": title,
+            "desp": content.replace("\n", "\n\n")
+        }
+        
+        # 发送请求
+        start_time = time.time()
+        response = requests.post(
+            f"https://sc.ftqq.com/{SCKEY}.send",
+            data=payload,
+            timeout=15
+        )
+        response_time = time.time() - start_time
+        
+        # 解析响应
         response_data = response.json()
+        print(f"📨 Server酱响应耗时: {response_time:.2f}s")
+        
+        if response_data.get('errno') == 0 or response_data.get('data', {}).get('errno') == 0:
+            print("✅ Server酱推送成功")
+            return True
+        else:
+            print(f"❌ Server酱推送失败: {response_data}")
+            return False
+            
+    except requests.exceptions.Timeout:
+        print("⏰ Server酱推送超时")
+        return False
+    except requests.exceptions.RequestException as e:
+        print(f"🌐 Server酱网络请求失败: {str(e)}")
+        return False
+    except json.JSONDecodeError as e:
+        print(f"📄 Server酱响应解析失败: {str(e)}")
+        return False
+    except Exception as e:
+        print(f"⚠️  Server酱推送异常: {str(e)}")
+        return False
+
+def xizhi_push(title: str, content: str) -> bool:
+    """
+    息知推送实现
+    
+    Args:
+        title: 消息标题
+        content: 消息内容
+        
+    Returns:
+        bool: 推送是否成功
+    """
+    print("🚀 开始息知推送")
+    
+    if not XZKEY:
+        print("❌ 息知XZKEY未配置，推送取消")
+        return False
+    
+    try:
+        # 构造请求数据
+        payload = {
+            'title': title,
+            'content': content.replace("\n", "\n\n")
+        }
+        
+        # 设置请求头
+        headers = {'Content-Type': 'application/json'}
+        
+        # 发送请求
+        start_time = time.time()
+        response = requests.post(
+            f"https://xizhi.qqoq.net/{XZKEY}.send",
+            data=json.dumps(payload),
+            headers=headers,
+            timeout=15
+        )
+        response_time = time.time() - start_time
+        
+        print(f"📨 息知响应状态码: {response.status_code}, 耗时: {response_time:.2f}s")
+        
         if response.status_code == 200:
-            print('推送成功！')
+            print("✅ 息知推送成功")
+            return True
         else:
-            print(f'推送失败！状态码: {response.status_code}')
+            print(f"❌ 息知推送失败，状态码: {response.status_code}")
+            return False
+            
+    except requests.exceptions.Timeout:
+        print("⏰ 息知推送超时")
+        return False
+    except requests.exceptions.RequestException as e:
+        print(f"🌐 息知网络请求失败: {str(e)}")
+        return False
     except Exception as e:
-        print(f'息知推送异常: {str(e)}')
+        print(f"⚠️  息知推送异常: {str(e)}")
+        return False
 
-# tg通知
-def telegram_bot(title, content):
+def pushplus_push(title: str, content: str) -> bool:
+    """
+    PushPlus推送实现
+    
+    Args:
+        title: 消息标题
+        content: 消息内容
+        
+    Returns:
+        bool: 推送是否成功
+    """
+    print("🚀 开始PushPlus推送")
+    
+    if not PUSH_PLUS_TOKEN:
+        print("❌ PushPlus Token未配置，推送取消")
+        return False
+    
     try:
-        print("\n")
-        bot_token = TG_BOT_TOKEN
-        user_id = TG_USER_ID
-        if not bot_token or not user_id:
-            print("tg服务的bot_token或者user_id未设置!!\n取消推送")
-            return
-        print("tg服务启动")
-        if TG_API_HOST:
-            if 'http' in TG_API_HOST:
-                url = f"{TG_API_HOST}/bot{TG_BOT_TOKEN}/sendMessage"
-            else:
-                url = f"https://{TG_API_HOST}/bot{TG_BOT_TOKEN}/sendMessage"
-        else:
-            url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-        payload = {'chat_id': str(TG_USER_ID), 'text': f'{title}\n\n{content}', 'disable_web_page_preview': 'true'}
-        proxies = None
-        if TG_PROXY_IP and TG_PROXY_PORT:
-            proxyStr = "http://{}:{}".format(TG_PROXY_IP, TG_PROXY_PORT)
-            proxies = {"http": proxyStr, "https": proxyStr}
-        try:
-            response = requests.post(url=url, headers=headers, params=payload, proxies=proxies).json()
-        except:
-            print('推送失败！')
-        if response['ok']:
-            print('推送成功！')
-        else:
-            print('推送失败！')
-    except Exception as e:
-        print(e)
-
-
-def dingding_bot(title, content):
-    timestamp = str(round(time.time() * 1000))  # 时间戳
-    secret_enc = DD_BOT_SECRET.encode('utf-8')
-    string_to_sign = '{}\n{}'.format(timestamp, DD_BOT_SECRET)
-    string_to_sign_enc = string_to_sign.encode('utf-8')
-    hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
-    sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))  # 签名
-    print('开始使用 钉钉机器人 推送消息...', end='')
-    url = f'https://oapi.dingtalk.com/robot/send?access_token={DD_BOT_ACCESS_TOKEN}&timestamp={timestamp}&sign={sign}'
-    headers = {'Content-Type': 'application/json;charset=utf-8'}
-    data = {
-        'msgtype': 'text',
-        'text': {'content': f'{title}\n\n{content}'}
-    }
-    response = requests.post(url=url, data=json.dumps(data), headers=headers, timeout=15).json()
-    if not response['errcode']:
-        print('推送成功！')
-    else:
-        print('推送失败！')
-
-
-def coolpush_bot(title, content):
-    print("\n")
-    if not QQ_SKEY or not QQ_MODE:
-        print("qq服务的QQ_SKEY或者QQ_MODE未设置!!\n取消推送")
-        return
-    print("qq服务启动")
-    url = f"https://qmsg.zendee.cn/{QQ_MODE}/{QQ_SKEY}"
-    payload = {'msg': f"{title}\n\n{content}".encode('utf-8')}
-    response = requests.post(url=url, params=payload).json()
-    if response['code'] == 0:
-        print('推送成功！')
-    else:
-        print('推送失败！')
-
-
-# push推送
-def pushplus_bot(title, content):
-    try:
-        print("\n")
-        if not PUSH_PLUS_TOKEN:
-            print("PUSHPLUS服务的token未设置!!\n取消推送")
-            return
-        print("PUSHPLUS服务启动")
-        url = 'http://www.pushplus.plus/send'
-        data = {
+        # 构造请求数据
+        payload = {
             "token": PUSH_PLUS_TOKEN,
             "title": title,
             "content": content
         }
-        body = json.dumps(data).encode(encoding='utf-8')
+        
+        # 设置请求头
         headers = {'Content-Type': 'application/json'}
-        response = requests.post(url=url, data=body, headers=headers).json()
-        if response['code'] == 200:
-            print('推送成功！')
+        
+        # 发送请求
+        start_time = time.time()
+        response = requests.post(
+            'http://www.pushplus.plus/send',
+            data=json.dumps(payload),
+            headers=headers,
+            timeout=15
+        )
+        response_time = time.time() - start_time
+        
+        # 解析响应
+        response_data = response.json()
+        print(f"📨 PushPlus响应耗时: {response_time:.2f}s")
+        
+        if response_data.get('code') == 200:
+            print("✅ PushPlus推送成功")
+            return True
         else:
-            print('推送失败！')
+            print(f"❌ PushPlus推送失败: {response_data.get('msg', '未知错误')}")
+            return False
+            
+    except requests.exceptions.Timeout:
+        print("⏰ PushPlus推送超时")
+        return False
+    except requests.exceptions.RequestException as e:
+        print(f"🌐 PushPlus网络请求失败: {str(e)}")
+        return False
+    except json.JSONDecodeError as e:
+        print(f"📄 PushPlus响应解析失败: {str(e)}")
+        return False
     except Exception as e:
-        print(e)
+        print(f"⚠️  PushPlus推送异常: {str(e)}")
+        return False
 
-
-print("xxxxxxxxxxxx")
-
-
-def wecom_key(title, content):
-    print("\n")
-    if not QYWX_KEY:
-        print("QYWX_KEY未设置!!\n取消推送")
-        return
-    print("QYWX_KEY服务启动")
-    print("content" + content)
-    headers = {'Content-Type': 'application/json'}
-    data = {
-        "msgtype": "text",
-        "text": {
-            "content": title + "\n" + content.replace("\n", "\n\n")
-        }
-    }
-
-    print(f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={QYWX_KEY}")
-    response = requests.post(f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={QYWX_KEY}", json=data,
-                             headers=headers).json()
-    print(response)
-
-
-# 企业微信 APP 推送
-def wecom_app(title, content):
-    try:
-        if not QYWX_AM:
-            print("QYWX_AM 并未设置！！\n取消推送")
-            return
-        QYWX_AM_AY = re.split(',', QYWX_AM)
-        if 4 < len(QYWX_AM_AY) > 5:
-            print("QYWX_AM 设置错误！！\n取消推送")
-            return
-        corpid = QYWX_AM_AY[0]
-        corpsecret = QYWX_AM_AY[1]
-        touser = QYWX_AM_AY[2]
-        agentid = QYWX_AM_AY[3]
+def send(title: str, content: str, use_buffer: bool = False) -> Dict[str, bool]:
+    """
+    发送消息到所有启用的推送渠道
+    
+    Args:
+        title: 消息标题
+        content: 消息内容
+        use_buffer: 是否使用缓冲区内容
+        
+    Returns:
+        Dict: 各推送渠道的结果字典
+    """
+    # 检查可用的推送服务
+    notify_modes = []
+    if SCKEY:
+        notify_modes.append('sc_key')
+    if XZKEY:
+        notify_modes.append('xz_key')
+    if PUSH_PLUS_TOKEN:
+        notify_modes.append('pushplus_bot')
+    
+    if not notify_modes:
+        print("⚠️  没有可用的推送服务，消息未发送")
+        return {}
+    
+    print(f"📋 可用推送服务: {', '.join(notify_modes)}")
+    
+    # 确定要发送的内容
+    final_content = get_message_content() if use_buffer and message_buffer else content
+    
+    if not final_content.strip():
+        print("⚠️  消息内容为空，取消发送")
+        return {}
+    
+    print(f"📤 开始发送消息: {title}")
+    print(f"📄 消息内容长度: {len(final_content)} 字符")
+    
+    results = {}
+    success_count = 0
+    
+    # 遍历所有启用的推送方式
+    for mode in notify_modes:
         try:
-            media_id = QYWX_AM_AY[4]
-        except:
-            media_id = ''
-        wx = WeCom(corpid, corpsecret, agentid)
-        # 如果没有配置 media_id 默认就以 text 方式发送
-        if not media_id:
-            message = title + '\n\n' + content
-            response = wx.send_text(message, touser)
-        else:
-            response = wx.send_mpnews(title, content, media_id, touser)
-        if response == 'ok':
-            print('推送成功！')
-        else:
-            print('推送失败！错误信息如下：\n', response)
-    except Exception as e:
-        print(e)
-
-
-class WeCom:
-    def __init__(self, corpid, corpsecret, agentid):
-        self.CORPID = corpid
-        self.CORPSECRET = corpsecret
-        self.AGENTID = agentid
-
-    def get_access_token(self):
-        url = 'https://qyapi.weixin.qq.com/cgi-bin/gettoken'
-        values = {'corpid': self.CORPID,
-                  'corpsecret': self.CORPSECRET,
-                  }
-        req = requests.post(url, params=values)
-        data = json.loads(req.text)
-        return data["access_token"]
-
-    def send_text(self, message, touser="@all"):
-        send_url = 'https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=' + self.get_access_token()
-        send_values = {
-            "touser": touser,
-            "msgtype": "text",
-            "agentid": self.AGENTID,
-            "text": {
-                "content": message
-            },
-            "safe": "0"
-        }
-        send_msges = (bytes(json.dumps(send_values), 'utf-8'))
-        respone = requests.post(send_url, send_msges)
-        respone = respone.json()
-        return respone["errmsg"]
-
-    def send_mpnews(self, title, message, media_id, touser="@all"):
-        send_url = 'https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=' + self.get_access_token()
-        send_values = {
-            "touser": touser,
-            "msgtype": "mpnews",
-            "agentid": self.AGENTID,
-            "mpnews": {
-                "articles": [
-                    {
-                        "title": title,
-                        "thumb_media_id": media_id,
-                        "author": "Author",
-                        "content_source_url": "",
-                        "content": message.replace('\n', '<br/>'),
-                        "digest": message
-                    }
-                ]
-            }
-        }
-        send_msges = (bytes(json.dumps(send_values), 'utf-8'))
-        respone = requests.post(send_url, send_msges)
-        respone = respone.json()
-        return respone["errmsg"]
-
-
-
-def send(title, content):
-    """
-    使用 bark, telegram bot, dingding bot, serverJ 发送手机推送
-    :param title:
-    :param content:
-    :return:
-    """
-    for i in notify_mode:
-        if i == 'bark':
-            if BARK or BARK_PUSH:
-                bark(title=title, content=content)
-            else:
-                print('未启用 bark')
-            continue
-        if i == 'sc_key':
-            if SCKEY:
-                serverJ(title=title, content=content)
-            else:
-                print('未启用 Server酱')
-            continue
-        elif i == 'xz_key':
-            if XZKEY:
-                xizhi(title=title, content=content)
-            else:
-                print('未启用 息知')
-            continue
-        elif i == 'dingding_bot':
-            if DD_BOT_ACCESS_TOKEN and DD_BOT_SECRET:
-                dingding_bot(title=title, content=content)
-            else:
-                print('未启用 钉钉机器人')
-            continue
-        elif i == 'telegram_bot':
-            if TG_BOT_TOKEN and TG_USER_ID:
-                telegram_bot(title=title, content=content)
-            else:
-                print('未启用 telegram机器人')
-            continue
-        elif i == 'coolpush_bot':
-            if QQ_SKEY and QQ_MODE:
-                coolpush_bot(title=title, content=content)
-            else:
-                print('未启用 QQ机器人')
-            continue
-        elif i == 'pushplus_bot':
-            if PUSH_PLUS_TOKEN:
-                pushplus_bot(title=title, content=content)
-            else:
-                print('未启用 PUSHPLUS机器人')
-            continue
-        elif i == 'wecom_app':
-            if QYWX_AM:
-                wecom_app(title=title, content=content)
-            else:
-                print('未启用企业微信应用消息推送')
-            continue
-        elif i == 'wecom_key':
-            if QYWX_KEY:
-
-                for i in range(int(len(content) / 2000) + 1):
-                    wecom_key(title=title, content=content[i * 2000:(i + 1) * 2000])
-
-
-            else:
-                print('未启用企业微信应用消息推送')
-            continue
-        else:
-            print('此类推送方式不存在')
-
+            if mode == 'sc_key':
+                result = server_jiang_push(title, final_content)
+                results['server_jiang'] = result
+                if result:
+                    success_count += 1
+            elif mode == 'xz_key':
+                result = xizhi_push(title, final_content)
+                results['xizhi'] = result
+                if result:
+                    success_count += 1
+            elif mode == 'pushplus_bot':
+                result = pushplus_push(title, final_content)
+                results['pushplus'] = result
+                if result:
+                    success_count += 1
+        except Exception as e:
+            print(f"💥 推送模式 {mode} 执行异常: {str(e)}")
+            results[mode] = False
+    
+    # 输出推送结果
+    print(f"📊 推送完成，成功: {success_count}/{len(results)}")
+    
+    return results
 
 def main():
-    send('title', 'content')
-
+    """测试函数"""
+    print("=" * 50)
+    print("🧪 开始测试推送服务")
+    print("=" * 50)
+    
+    # 添加测试消息到缓冲区
+    add_message("这是一条测试消息")
+    add_message("第二行测试内容")
+    add_message("最后一行内容")
+    
+    # 发送测试消息
+    results = send(
+        title="测试通知标题",
+        content="这是直接传入的内容\n将会被缓冲区内容覆盖",
+        use_buffer=True
+    )
+    
+    print(f"📋 测试完成，结果: {results}")
+    
+    # 清空缓冲区
+    clear_messages()
 
 if __name__ == '__main__':
     main()
