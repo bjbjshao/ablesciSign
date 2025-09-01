@@ -174,12 +174,15 @@ def xizhi(title, content):
         'content': content.replace("\n", "\n\n")
     }
     data1 = json.dumps(json_data).encode('utf-8')
-    response = requests.post(f"https://xizhi.qqoq.net/{XZKEY}.send", data=data1,headers=headers1 )
-    print(response)
-#    if response['errno'] == 0:
-#        print('推送成功！')
-#    else:
-#        print('推送失败！')
+    try:
+        response = requests.post(f"https://xizhi.qqoq.net/{XZKEY}.send", data=data1, headers=headers1)
+        response_data = response.json()
+        if response.status_code == 200:
+            print('推送成功！')
+        else:
+            print(f'推送失败！状态码: {response.status_code}')
+    except Exception as e:
+        print(f'息知推送异常: {str(e)}')
 
 # tg通知
 def telegram_bot(title, content):
